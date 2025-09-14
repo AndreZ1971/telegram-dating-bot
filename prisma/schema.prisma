@@ -8,78 +8,116 @@ datasource db {
 }
 
 model User {
-  id          BigInt       @id
-  username    String?
-  firstName   String?
-  lang        String?
-  createdAt   DateTime     @default(now())
-  profile     Profile?
-  preferences Preferences?
-  likesFrom   Like[]       @relation("likes_from")
-  likesTo     Like[]       @relation("likes_to")
+  id            BigInt    @id
+  username      String?
+  firstName     String?
+  lang          String?
+  createdAt     DateTime  @default(now())
+
+  profile       Profile?
+  preferences   Preferences?
+
+  // Beziehungen für Likes
+  likesFrom     Like[]    @relation("likes_from")
+  likesTo       Like[]    @relation("likes_to")
+
+  // Beziehungen für Reports
+  reportsMade       Report[] @relation("reports_made")
+  reportsReceived   Report[] @relation("reports_received")
 }
 
 model Profile {
-  id          Int               @id @default(autoincrement())
-  user        User              @relation(fields: [userId], references: [id])
-  userId      BigInt            @unique
-  displayName String
+  id          Int       @id @default(autoincrement())
+  userId      BigInt    @unique
+  displayName String?
   age         Int?
-  bioMe       String?
+  isAdult     Boolean   @default(false)
+  identity    String?
   bioSeek     String?
-  identity    String? // vorher: enum Identity
-  isAdult     Boolean           @default(false)
-  isSfwOnly   Boolean           @default(true)
-  visible     Boolean           @default(true)
-  photos      Photo[]
+  visible     Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Interessen/Filter
   audiences   ProfileAudience[]
-  updatedAt   DateTime          @updatedAt
+  // Fotos
+  photos      Photo[]
+  // Tags
+  profileTags ProfileTag[]
 }
 
-model ProfileAudience {
-  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
-  profileId Int
-  audience  String // vorher: enum Audience
-  createdAt DateTime @default(now())
+model Preferences {
+  userId    BigInt   @id
+  showAdult Boolean  @default(false)
+  minAge    Int?
+  maxAge    Int?
 
-  @@id([profileId, audience])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Like {
+  id          Int      @id @default(autoincrement())
+  fromUserId  BigInt
+  toUserId    BigInt
+  createdAt   DateTime @default(now())
+
+  fromUser    User     @relation("likes_from", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser      User     @relation("likes_to",   fields: [toUserId],   references: [id], onDelete: Cascade)
+
+  @@unique([fromUserId, toUserId])
+  @@index([toUserId])
+}
+
+model Report {
+  id               Int      @id @default(autoincrement())
+  reporterUserId   BigInt
+  reportedUserId   BigInt
+  reason           String?
+  createdAt        DateTime @default(now())
+
+  reporterUser     User     @relation("reports_made",     fields: [reporterUserId], references: [id], onDelete: Cascade)
+  reportedUser     User     @relation("reports_received", fields: [reportedUserId], references: [id], onDelete: Cascade)
+
+  @@index([reportedUserId])
 }
 
 model Photo {
   id        Int      @id @default(autoincrement())
-  profile   Profile  @relation(fields: [profileId], references: [id])
   profileId Int
   fileId    String
   isPrimary Boolean  @default(false)
   createdAt DateTime @default(now())
+
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
 }
 
-model Preferences {
+model ProfileAudience {
   id        Int     @id @default(autoincrement())
-  user      User    @relation(fields: [userId], references: [id])
-  userId    BigInt  @unique
-  minAge    Int?
-  maxAge    Int?
-  showAdult Boolean @default(false)
-  radiusKm  Int?
-  tagsJson  String?
+  profileId Int
+  audience  String
+
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, audience])
+  @@index([audience])
 }
 
-model Like {
-  id         Int      @id @default(autoincrement())
-  fromUser   User     @relation("likes_from", fields: [fromUserId], references: [id])
-  fromUserId BigInt
-  toUser     User     @relation("likes_to", fields: [toUserId], references: [id])
-  toUserId   BigInt
-  createdAt  DateTime @default(now())
-
-  @@unique([fromUserId, toUserId])
+model Tag {
+  id          Int          @id @default(autoincrement())
+  label       String
+  slug        String       @unique            // lowercase/normalisiert
+  profileTags ProfileTag[]
 }
 
-model Report {
-  id             Int      @id @default(autoincrement())
-  reporterUserId BigInt
-  reportedUserId BigInt
-  reason         String?
-  createdAt      DateTime @default(now())
+model ProfileTag {
+  profileId Int
+  tagId     Int
+
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([profileId, tagId])
+  @@index([tagId])
 }

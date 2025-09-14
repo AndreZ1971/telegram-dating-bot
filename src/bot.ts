@@ -51,6 +51,23 @@ const audienceLabels: Record<Audience, string> = {
 
 /**
  * ---------------------------
+ *  Tags (Quick-Buttons & Limits)
+ * ---------------------------
+ */
+const QUICK_TAGS = [
+  "Outdoor", "Reisen", "Wandern", "Fitness",
+  "Kaffee", "Kochen", "Essen gehen", "Kino",
+  "Musik", "Konzerte", "Gaming", "Fotografie",
+  "Kunst", "Bücher", "Tiere", "Motorrad",
+] as const;
+
+const MAX_TAGS_PER_PROFILE = 10;
+
+const slugify = (s: string) =>
+  s.normalize("NFKC").trim().toLowerCase().replace(/\s+/g, " ").slice(0, 30);
+
+/**
+ * ---------------------------
  *  Session / Wizard / Browse
  * ---------------------------
  */
@@ -61,7 +78,8 @@ type WizardStep =
   | "identity"
   | "looking"
   | "bioSeek"
-  | "confirm";
+  | "confirm"
+  | "tagsAdd"; // Freitext-Eingabe für /tags
 
 type TempProfile = {
   displayName?: string;
@@ -171,6 +189,7 @@ const formatProfileCard = (p: {
   identity: string | null;
   bioSeek: string | null;
   audiences: { audience: string }[];
+  profileTags?: { tag: { label: string } }[];
 }) => {
   const idLabel = p.identity && (IDENTITIES as readonly string[]).includes(p.identity as Identity)
     ? identityLabels[p.identity as Identity]
@@ -182,13 +201,18 @@ const formatProfileCard = (p: {
     .join(", ") || "—";
   const age = p.age ?? "—";
   const bio = p.bioSeek?.trim() || "—";
-  return `${p.displayName}, ${age} · ${idLabel}\nSucht: ${seeks}\n„${bio}”`;
+  const tags = p.profileTags?.map((pt) => `#${pt.tag.label.replace(/\s+/g, "")}`) ?? [];
+  const tagsLine = tags.length ? `\nTags: ${tags.slice(0, 6).join(" ")}` : "";
+  return `${p.displayName}, ${age} · ${idLabel}\nSucht: ${seeks}\n„${bio}”${tagsLine}`;
 };
 
 const usernameOrLink = (u: { username: string | null; id: bigint }) => {
   if (u.username) return `@${u.username}`;
   return `tg://user?id=${u.id.toString()}`;
 };
+
+const enc = (s: string) => encodeURIComponent(s);
+const dec = (s: string) => decodeURIComponent(s);
 
 /**
  * ---------------------------
@@ -214,19 +238,22 @@ const mainMenu = new Menu("main-menu")
   .row()
   .text("👤 Mein Profil", (ctx) => showMyProfile(ctx))
   .row()
+  .text("🖼️ Fotos", (ctx) => showPhotos(ctx as MyContext))
+  .row()
+  .text("🏷️ Tags", (ctx) => showTags(ctx as MyContext))
+  .row()
   .text("🔎 Entdecken", (ctx) => startBrowse(ctx));
 
 bot.use(mainMenu);
 
 /**
  * ---------------------------
- *  Onboarding Wizard
+ *  Onboarding Wizard (unverändert)
  * ---------------------------
  */
 async function startWizard(ctx: MyContext, edit = false) {
   const id = userIdOf(ctx);
 
-  // user row
   await prisma.user.upsert({
     where: { id },
     update: {
@@ -242,7 +269,6 @@ async function startWizard(ctx: MyContext, edit = false) {
     },
   });
 
-  // load existing to prefill (when editing)
   const prof = await prisma.profile.findUnique({ where: { userId: id } });
   let looking: Audience[] = [];
   if (prof) {
@@ -351,7 +377,6 @@ async function goBack(ctx: MyContext) {
  * ---------------------------
  */
 bot.command(["start", "help"], async (ctx) => {
-  // user row anlegen/aktualisieren
   const id = userIdOf(ctx);
   await prisma.user.upsert({
     where: { id },
@@ -369,7 +394,7 @@ bot.command(["start", "help"], async (ctx) => {
   });
 
   await ctx.reply(
-    "Willkommen beim Dating-Bot!\n\n• /profile – Profil einrichten/bearbeiten\n• /myprofile – Profilkarte anzeigen\n• /browse – Profile entdecken (nach Setup)\n• /settings – 18+ & Altersfilter\n• /deleteme – Profil & Daten löschen\n• /cancel – aktuellen Vorgang abbrechen",
+    "Willkommen beim Dating-Bot!\n\n• /profile – Profil einrichten/bearbeiten\n• /myprofile – Profilkarte anzeigen\n• /photos – Fotos verwalten (1–3)\n• /tags – Interessen setzen\n• /browse – Profile entdecken\n• /settings – 18+ & Altersfilter\n• /deleteme – Profil & Daten löschen\n• /cancel – aktuellen Vorgang abbrechen",
     { reply_markup: mainMenu }
   );
 });
@@ -382,6 +407,8 @@ bot.command("cancel", async (ctx) => {
 });
 bot.command("myprofile", async (ctx) => showMyProfile(ctx));
 bot.command("browse", async (ctx) => startBrowse(ctx));
+bot.command("photos", async (ctx) => showPhotos(ctx as MyContext));
+bot.command("tags", async (ctx) => showTags(ctx as MyContext));
 
 /**
  * ---------------------------
@@ -392,7 +419,10 @@ async function showMyProfile(ctx: MyContext) {
   const id = userIdOf(ctx);
   const prof = await prisma.profile.findUnique({
     where: { userId: id },
-    include: { audiences: true },
+    include: {
+      audiences: true,
+      profileTags: { include: { tag: true } },
+    },
   });
 
   if (!prof) {
@@ -402,6 +432,9 @@ async function showMyProfile(ctx: MyContext) {
   const card = formatProfileCard(prof);
   const kb = new InlineKeyboard()
     .text("✏️ Bearbeiten", "edit_profile")
+    .text("🖼️ Fotos", "go_photos")
+    .row()
+    .text("🏷️ Tags", "go_tags")
     .text("🔎 Entdecken", "go_browse");
 
   await ctx.reply(card, { reply_markup: kb });
@@ -415,17 +448,276 @@ bot.callbackQuery("go_browse", async (ctx) => {
   await ctx.answerCallbackQuery();
   await startBrowse(ctx as MyContext);
 });
+bot.callbackQuery("go_photos", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await showPhotos(ctx as MyContext);
+});
+bot.callbackQuery("go_tags", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await showTags(ctx as MyContext);
+});
 
 /**
  * ---------------------------
- *  /browse (Like / Skip / Report)
+ *  Fotos (/photos) – unverändert aus deiner Version
+ * ---------------------------
+ */
+async function showPhotos(ctx: MyContext) {
+  const id = userIdOf(ctx);
+  const prof = await prisma.profile.findUnique({ where: { userId: id } });
+  if (!prof) return ctx.reply("Bitte erst ein Profil anlegen: /profile");
+
+  const photos = await prisma.photo.findMany({
+    where: { profileId: prof.id },
+    orderBy: [{ isPrimary: "desc" }, { createdAt: "desc" }],
+  });
+
+  await ctx.reply(
+    `📸 *Deine Fotos* (${photos.length}/3)\n` +
+    `• Sende mir ein Bild, um es hinzuzufügen.\n` +
+    `• Tippe „⭐️ Primär“, um das Hauptbild festzulegen.\n` +
+    `• „🗑️ Löschen“ entfernt es wieder.`,
+    { parse_mode: "Markdown" }
+  );
+
+  if (photos.length === 0) return;
+
+  for (const ph of photos) {
+    const kb = new InlineKeyboard()
+      .text(ph.isPrimary ? "⭐️ Primär" : "☆ Primär setzen", `photo:set:${ph.id}`)
+      .text("🗑️ Löschen", `photo:del:${ph.id}`);
+    await ctx.replyWithPhoto(ph.fileId, {
+      caption: ph.isPrimary ? "Primärbild" : "Sekundärbild",
+      reply_markup: kb,
+    });
+  }
+}
+
+bot.on("message:photo", async (ctx) => {
+  const id = userIdOf(ctx);
+  const limit = checkRate(id, "upload_photo", 20, 60 * 60 * 1000);
+  if (!limit.ok) return ctx.reply(`Zu viele Uploads. Bitte versuche es in ~${limit.minutesLeft} Min. erneut.`);
+
+  const prof = await prisma.profile.findUnique({ where: { userId: id } });
+  if (!prof) return ctx.reply("Bitte erst ein Profil anlegen: /profile");
+
+  const count = await prisma.photo.count({ where: { profileId: prof.id } });
+  if (count >= 3) return ctx.reply("Du hast bereits 3 Fotos. Lösche zuerst eines mit 🗑️.");
+
+  const sizes = ctx.message.photo;
+  const largest = sizes[sizes.length - 1];
+  const fileId = largest.file_id;
+
+  const hasPrimary = await prisma.photo.findFirst({
+    where: { profileId: prof.id, isPrimary: true },
+  });
+
+  const saved = await prisma.photo.create({
+    data: { profileId: prof.id, fileId, isPrimary: !hasPrimary },
+  });
+
+  const kb = new InlineKeyboard()
+    .text(saved.isPrimary ? "⭐️ Primär" : "☆ Primär setzen", `photo:set:${saved.id}`)
+    .text("🗑️ Löschen", `photo:del:${saved.id}`);
+
+  await ctx.replyWithPhoto(fileId, {
+    caption: saved.isPrimary ? "Primärbild gespeichert ✅" : "Foto gespeichert ✅",
+    reply_markup: kb,
+  });
+});
+
+bot.callbackQuery(/^photo:set:(\d+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const photoId = Number(ctx.match![1]);
+  const id = userIdOf(ctx);
+  const prof = await prisma.profile.findUnique({ where: { userId: id } });
+  if (!prof) return;
+
+  const target = await prisma.photo.findUnique({ where: { id: photoId } });
+  if (!target || target.profileId !== prof.id) return;
+
+  await prisma.photo.updateMany({ where: { profileId: prof.id }, data: { isPrimary: false } });
+  await prisma.photo.update({ where: { id: photoId }, data: { isPrimary: true } });
+  await ctx.editMessageCaption({ caption: "Primärbild ✅" });
+});
+
+bot.callbackQuery(/^photo:del:(\d+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const photoId = Number(ctx.match![1]);
+  const id = userIdOf(ctx);
+  const prof = await prisma.profile.findUnique({ where: { userId: id } });
+  if (!prof) return;
+
+  const target = await prisma.photo.findUnique({ where: { id: photoId } });
+  if (!target || target.profileId !== prof.id) return;
+
+  const wasPrimary = target.isPrimary;
+  await prisma.photo.delete({ where: { id: photoId } });
+
+  if (wasPrimary) {
+    const next = await prisma.photo.findFirst({
+      where: { profileId: prof.id },
+      orderBy: { createdAt: "desc" },
+    });
+    if (next) {
+      await prisma.photo.update({ where: { id: next.id }, data: { isPrimary: true } });
+    }
+  }
+
+  await ctx.editMessageCaption({ caption: "Foto gelöscht 🗑️" }).catch(() => {});
+});
+
+/**
+ * ---------------------------
+ *  /tags – Schnellbuttons + Freitext
+ * ---------------------------
+ */
+async function showTags(ctx: MyContext) {
+  const uid = userIdOf(ctx);
+  const prof = await prisma.profile.findUnique({
+    where: { userId: uid },
+    include: { profileTags: { include: { tag: true } } },
+  });
+  if (!prof) return ctx.reply("Bitte erst ein Profil anlegen: /profile");
+
+  const my = new Set(prof.profileTags.map((pt) => slugify(pt.tag.slug || pt.tag.label)));
+  const list = prof.profileTags.map((pt) => `#${pt.tag.label.replace(/\s+/g, "")}`).join(" ");
+
+  const kb = new InlineKeyboard();
+  QUICK_TAGS.forEach((t, i) => {
+    const on = my.has(slugify(t));
+    kb.text(`${on ? "✅" : "☐"} ${t}`, `tag:q:${enc(t)}`);
+    if ((i + 1) % 2 === 0) kb.row();
+  });
+  kb.row()
+    .text("➕ Freitext", "tag:add")
+    .text("🧹 Alle löschen", "tag:clear")
+    .row()
+    .text("✅ Fertig", "tag:done");
+
+  await ctx.reply(
+    `🏷️ *Deine Tags* (${my.size}/${MAX_TAGS_PER_PROFILE})\n${list || "— noch keine —"}\n\n` +
+    `• Tippe auf Buttons zum An-/Abwählen.\n` +
+    `• „➕ Freitext“: z. B. _„Metal, Berlin, Tanzen“_.`,
+    { parse_mode: "Markdown", reply_markup: kb }
+  );
+}
+
+bot.callbackQuery(/^tag:q:(.+)$/, async (ctx) => {
+  const label = dec(ctx.match![1]);
+  const slug = slugify(label);
+  const uid = userIdOf(ctx);
+
+  const prof = await prisma.profile.findUnique({
+    where: { userId: uid },
+    include: { profileTags: { include: { tag: true } } },
+  });
+  if (!prof) return ctx.answerCallbackQuery("Kein Profil");
+
+  // Limit prüfen
+  const mySlugs = new Set(prof.profileTags.map((pt) => pt.tag.slug));
+  const has = mySlugs.has(slug);
+
+  if (!has && mySlugs.size >= MAX_TAGS_PER_PROFILE) {
+    return ctx.answerCallbackQuery("Max. 10 Tags erreicht.");
+  }
+
+  // Tag upsert
+  const t = await prisma.tag.upsert({
+    where: { slug },
+    update: { label },
+    create: { label, slug },
+  });
+
+  if (has) {
+    await prisma.profileTag.delete({ where: { profileId_tagId: { profileId: prof.id, tagId: t.id } } });
+    await ctx.answerCallbackQuery("Tag entfernt");
+  } else {
+    await prisma.profileTag.create({ data: { profileId: prof.id, tagId: t.id } });
+    await ctx.answerCallbackQuery("Tag hinzugefügt");
+  }
+
+  // UI minimal aktualisieren: Keine Caption vorhanden → einfach Buttons neu schicken via showTags
+  await showTags(ctx as MyContext);
+});
+
+bot.callbackQuery("tag:add", async (ctx) => {
+  (ctx as MyContext).session.step = "tagsAdd";
+  await ctx.answerCallbackQuery();
+  await ctx.reply("Sende mir neue Tags als Text, getrennt durch Kommas. Beispiel: _Metal, Berlin, Tanzen_", {
+    parse_mode: "Markdown",
+  });
+});
+
+bot.callbackQuery("tag:clear", async (ctx) => {
+  const uid = userIdOf(ctx);
+  const prof = await prisma.profile.findUnique({ where: { userId: uid } });
+  if (!prof) return ctx.answerCallbackQuery();
+
+  await prisma.profileTag.deleteMany({ where: { profileId: prof.id } });
+  await ctx.answerCallbackQuery("Alle Tags entfernt");
+  await showTags(ctx as MyContext);
+});
+
+bot.callbackQuery("tag:done", async (ctx) => {
+  await ctx.answerCallbackQuery("Fertig");
+  await showMyProfile(ctx as MyContext);
+});
+
+// Freitext-Tags parsen
+function parseTags(raw: string): string[] {
+  return raw
+    .split(/[,\n;]/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map((x) => x.replace(/^#+/, ""))         // #tag → tag
+    .map((x) => x.replace(/\s{2,}/g, " "))    // Mehrfachspaces
+    .slice(0, 20);
+}
+
+async function addFreeTags(uid: bigint, labels: string[]) {
+  const prof = await prisma.profile.findUnique({
+    where: { userId: uid },
+    include: { profileTags: { include: { tag: true } } },
+  });
+  if (!prof) return { added: 0, skipped: labels.length };
+
+  const current = new Set(prof.profileTags.map((pt) => pt.tag.slug));
+  let left = MAX_TAGS_PER_PROFILE - current.size;
+  let added = 0;
+
+  for (const labelRaw of labels) {
+    if (left <= 0) break;
+    const label = labelRaw.slice(0, 30);
+    const slug = slugify(label);
+    if (!slug || current.has(slug)) continue;
+
+    const t = await prisma.tag.upsert({
+      where: { slug },
+      update: { label },
+      create: { label, slug },
+    });
+    await prisma.profileTag.create({ data: { profileId: prof.id, tagId: t.id } });
+    current.add(slug);
+    left--;
+    added++;
+  }
+  return { added, skipped: labels.length - added };
+}
+
+/**
+ * ---------------------------
+ *  /browse (Like / Skip / Report) – mit Tag-Ranking
  * ---------------------------
  */
 async function startBrowse(ctx: MyContext) {
   const myId = userIdOf(ctx);
   const me = await prisma.profile.findUnique({
     where: { userId: myId },
-    include: { audiences: true },
+    include: {
+      audiences: true,
+      profileTags: { include: { tag: true } },
+    },
   });
   if (!me || !me.displayName || !me.age || !me.identity || me.audiences.length === 0) {
     return ctx.reply(
@@ -443,9 +735,6 @@ async function startBrowse(ctx: MyContext) {
 }
 
 async function buildCandidateQueue(myId: bigint, me: any): Promise<number[]> {
-  // rate limiting fürs Browsen nicht nötig, nur für Aktionen
-
-  // bereits gelikte / gemeldete Nutzer ausschließen
   const myLikes = await prisma.like.findMany({ where: { fromUserId: myId } });
   const liked = new Set(myLikes.map((l) => l.toUserId.toString()));
   const myReports = await prisma.report.findMany({ where: { reporterUserId: myId } });
@@ -456,7 +745,6 @@ async function buildCandidateQueue(myId: bigint, me: any): Promise<number[]> {
     .map((a: any) => a.audience as Audience)
     .filter((a: string): a is Audience => (AUDIENCES as readonly string[]).includes(a));
 
-  // Alterspräferenzen
   const prefs = await prisma.preferences.findUnique({ where: { userId: myId } });
   const minAge = prefs?.minAge ?? (me.isAdult ? 18 : 13);
   const maxAge = prefs?.maxAge ?? 120;
@@ -466,17 +754,24 @@ async function buildCandidateQueue(myId: bigint, me: any): Promise<number[]> {
       userId: { not: myId },
       visible: true,
       displayName: { not: null },
-      age: { gte: minAge, lte: maxAge }, // filter nach meinen age prefs
+      age: { gte: minAge, lte: maxAge },
       identity: { not: null },
     },
-    include: { audiences: true, user: true },
+    include: {
+      audiences: true,
+      user: true,
+      profileTags: { include: { tag: true } },
+    },
     orderBy: { updatedAt: "desc" },
-    take: 50,
+    take: 80,
   });
 
-  const matchMe = (cand: any) => {
+  const myTagSlugs = new Set<string>(me.profileTags.map((pt: any) => pt.tag.slug));
+
+  const score = (cand: any) => {
+    // Basis-Passung
     const cIdentity = cand.identity as Identity;
-    if (!(IDENTITIES as readonly string[]).includes(cIdentity)) return false;
+    if (!(IDENTITIES as readonly string[]).includes(cIdentity)) return -1;
     const catOfCand = identityToAudience(cIdentity);
 
     const iWantThem = myLooking.includes("ANY") || myLooking.includes(catOfCand);
@@ -488,13 +783,26 @@ async function buildCandidateQueue(myId: bigint, me: any): Promise<number[]> {
       theirLooking.includes("ANY") ||
       theirLooking.includes(identityToAudience(myIdentity));
 
-    const notLiked = !liked.has(cand.userId.toString());
-    const notReported = !reported.has(cand.userId.toString());
+    if (!iWantThem || !theyWantMe) return -1;
+    if (liked.has(cand.userId.toString()) || reported.has(cand.userId.toString())) return -1;
 
-    return iWantThem && theyWantMe && notLiked && notReported;
+    // Tag-Overlap
+    const cSlugs: string[] = cand.profileTags.map((pt: any) => pt.tag.slug);
+    let overlap = 0;
+    for (const s of cSlugs) if (myTagSlugs.has(s)) overlap++;
+
+    // Score: Overlap * 10 + Aktualität-Bonus (optional)
+    return overlap * 10;
   };
 
-  return candidates.filter(matchMe).map((c) => c.id);
+  // sortiere nach Score (desc), dann updatedAt (desc)
+  const ranked = candidates
+    .map((c) => ({ c, s: score(c) }))
+    .filter(({ s }) => s >= 0)
+    .sort((a, b) => (b.s - a.s) || (new Date(b.c.updatedAt).getTime() - new Date(a.c.updatedAt).getTime()))
+    .map(({ c }) => c.id);
+
+  return ranked;
 }
 
 async function showNextCandidate(ctx: MyContext) {
@@ -507,7 +815,11 @@ async function showNextCandidate(ctx: MyContext) {
   const profileId = state.queue[state.index];
   const prof = await prisma.profile.findUnique({
     where: { id: profileId },
-    include: { audiences: true, user: true },
+    include: {
+      audiences: true,
+      user: true,
+      profileTags: { include: { tag: true } },
+    },
   });
   if (!prof) {
     state.index++;
@@ -523,7 +835,14 @@ async function showNextCandidate(ctx: MyContext) {
     .row()
     .text("🚩 Melden", "br_report");
 
-  await ctx.reply(card, { reply_markup: kb });
+  const primary = await prisma.photo.findFirst({
+    where: { profileId: prof.id, isPrimary: true },
+  });
+  if (primary) {
+    await ctx.replyWithPhoto(primary.fileId, { caption: card, reply_markup: kb });
+  } else {
+    await ctx.reply(card, { reply_markup: kb });
+  }
 }
 
 bot.callbackQuery("br_skip", async (ctx) => {
@@ -551,7 +870,6 @@ bot.callbackQuery("br_like", async (ctx) => {
     return showNextCandidate(ctx as MyContext);
   }
 
-  // Upsert via composite unique (fromUserId,toUserId)
   await prisma.like.upsert({
     where: {
       fromUserId_toUserId: { fromUserId: myId, toUserId: prof.userId },
@@ -560,7 +878,6 @@ bot.callbackQuery("br_like", async (ctx) => {
     create: { fromUserId: myId, toUserId: prof.userId },
   });
 
-  // Match prüfen
   const match = await prisma.like.findFirst({
     where: { fromUserId: prof.userId, toUserId: myId },
   });
@@ -576,9 +893,7 @@ bot.callbackQuery("br_like", async (ctx) => {
         `🎉 *It's a match!* Mit ${ctx.from?.first_name ?? "jemandem"}.\nChat: @${ctx.from?.username ?? ""}`.trim(),
         { parse_mode: "Markdown" }
       );
-    } catch {
-      // User hat Bot nicht gestartet → ignorieren
-    }
+    } catch {}
   } else {
     await ctx.reply("Gespeichert. Wir sagen dir Bescheid, wenn es ein Match gibt. ✅");
   }
@@ -587,7 +902,6 @@ bot.callbackQuery("br_like", async (ctx) => {
   await showNextCandidate(ctx as MyContext);
 });
 
-// Report → Gründe
 const REPORT_REASONS = [
   ["spam", "Spam/Scam"],
   ["harass", "Belästigung"],
@@ -642,11 +956,21 @@ bot.callbackQuery(/^rep:(.+)$/, async (ctx) => {
 
 /**
  * ---------------------------
- *  Text-Handler (nur für aktive Schritte)
+ *  Text-Handler (Wizard + Tag-Freitext)
  * ---------------------------
  */
 bot.on("message:text", async (ctx, next) => {
   const step = ctx.session.step;
+
+  if (step === "tagsAdd") {
+    const uid = userIdOf(ctx);
+    const tags = parseTags(ctx.message.text);
+    const { added, skipped } = await addFreeTags(uid, tags);
+    ctx.session.step = "idle";
+    await ctx.reply(`Hinzugefügt: ${added}${skipped ? ` · Übersprungen: ${skipped}` : ""}`);
+    return showTags(ctx as MyContext);
+  }
+
   if (step === "idle") return next();
 
   const text = ctx.message.text.trim();
@@ -675,7 +999,7 @@ bot.on("message:text", async (ctx, next) => {
 
 /**
  * ---------------------------
- *  Wizard Callback-Handler
+ *  Wizard Callback-Handler (unverändert)
  * ---------------------------
  */
 bot.callbackQuery(/^ident:(.+)$/, async (ctx) => {
@@ -729,7 +1053,6 @@ bot.callbackQuery("confirm:save", async (ctx) => {
     return ctx.answerCallbackQuery("Bitte zuerst alle Schritte ausfüllen.");
   }
 
-  // upsert profile
   const prof = await prisma.profile.upsert({
     where: { userId: id },
     update: {
@@ -764,7 +1087,7 @@ bot.callbackQuery("confirm:save", async (ctx) => {
 
 /**
  * ---------------------------
- *  Settings: 18+ Toggle + Altersfilter
+ *  Settings & Deleteme – aus deiner Version
  * ---------------------------
  */
 bot.command("settings", async (ctx) => {
@@ -793,7 +1116,6 @@ bot.command("settings", async (ctx) => {
     { reply_markup: kb }
   );
 });
-
 bot.callbackQuery("toggle_adult", async (ctx) => {
   const id = userIdOf(ctx);
   const pref = await prisma.preferences.findUnique({ where: { userId: id } });
@@ -802,7 +1124,6 @@ bot.callbackQuery("toggle_adult", async (ctx) => {
   await prisma.preferences.update({ where: { userId: id }, data: { showAdult: nextVal } });
   await ctx.answerCallbackQuery(nextVal ? "18+ sichtbar." : "18+ ausgeblendet.");
 });
-
 async function updateAgePref(ctx: MyContext, which: "min" | "max", delta: number) {
   const id = userIdOf(ctx);
   const pref = await prisma.preferences.upsert({
@@ -812,51 +1133,32 @@ async function updateAgePref(ctx: MyContext, which: "min" | "max", delta: number
   });
   let minAge = pref.minAge ?? 18;
   let maxAge = pref.maxAge ?? 120;
-
   if (which === "min") minAge = Math.min(Math.max(13, minAge + delta), maxAge);
   if (which === "max") maxAge = Math.max(Math.min(120, maxAge + delta), minAge);
-
-  await prisma.preferences.update({
-    where: { userId: id },
-    data: { minAge, maxAge },
-  });
-
+  await prisma.preferences.update({ where: { userId: id }, data: { minAge, maxAge } });
   await ctx.answerCallbackQuery(`Alter: ${minAge}–${maxAge}`);
 }
-
 bot.callbackQuery("age:min:dec", (ctx) => updateAgePref(ctx as MyContext, "min", -1));
 bot.callbackQuery("age:min:inc", (ctx) => updateAgePref(ctx as MyContext, "min", +1));
 bot.callbackQuery("age:max:dec", (ctx) => updateAgePref(ctx as MyContext, "max", -1));
 bot.callbackQuery("age:max:inc", (ctx) => updateAgePref(ctx as MyContext, "max", +1));
 bot.callbackQuery("age:reset", async (ctx) => {
   const id = userIdOf(ctx);
-  await prisma.preferences.update({
-    where: { userId: id },
-    data: { minAge: null, maxAge: null },
-  });
+  await prisma.preferences.update({ where: { userId: id }, data: { minAge: null, maxAge: null } });
   await ctx.answerCallbackQuery("Alter zurückgesetzt (Standard).");
 });
 
-/**
- * ---------------------------
- *  /deleteme (Daten löschen)
- * ---------------------------
- */
 bot.command("deleteme", async (ctx) => {
-  const kb = new InlineKeyboard()
-    .text("❌ Löschen bestätigen", "del:yes")
-    .text("Abbrechen", "del:no");
-  await ctx.reply(
-    "⚠️ Das löscht *alle* deine Daten (Profil, Likes, Meldungen, Einstellungen). Sicher?",
-    { parse_mode: "Markdown", reply_markup: kb }
-  );
+  const kb = new InlineKeyboard().text("❌ Löschen bestätigen", "del:yes").text("Abbrechen", "del:no");
+  await ctx.reply("⚠️ Das löscht *alle* deine Daten (Profil, Likes, Meldungen, Einstellungen). Sicher?", {
+    parse_mode: "Markdown",
+    reply_markup: kb,
+  });
 });
-
 bot.callbackQuery("del:no", async (ctx) => {
   await ctx.answerCallbackQuery("Abgebrochen");
   await ctx.editMessageText("Löschen abgebrochen.");
 });
-
 bot.callbackQuery("del:yes", async (ctx) => {
   const id = userIdOf(ctx);
   const profile = await prisma.profile.findUnique({ where: { userId: id } });
@@ -866,6 +1168,7 @@ bot.callbackQuery("del:yes", async (ctx) => {
 
   if (profile) {
     await prisma.photo.deleteMany({ where: { profileId: profile.id } });
+    await prisma.profileTag.deleteMany({ where: { profileId: profile.id } });
     await prisma.profileAudience.deleteMany({ where: { profileId: profile.id } });
     await prisma.profile.delete({ where: { id: profile.id } });
   }
