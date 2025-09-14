@@ -20,18 +20,29 @@ model User {
 }
 
 model Profile {
-  id          Int      @id @default(autoincrement())
-  user        User     @relation(fields: [userId], references: [id])
-  userId      BigInt   @unique
+  id          Int               @id @default(autoincrement())
+  user        User              @relation(fields: [userId], references: [id])
+  userId      BigInt            @unique
   displayName String
   age         Int?
   bioMe       String?
   bioSeek     String?
-  isAdult     Boolean  @default(false)
-  isSfwOnly   Boolean  @default(true)
-  visible     Boolean  @default(true)
+  identity    String? // vorher: enum Identity
+  isAdult     Boolean           @default(false)
+  isSfwOnly   Boolean           @default(true)
+  visible     Boolean           @default(true)
   photos      Photo[]
-  updatedAt   DateTime @updatedAt
+  audiences   ProfileAudience[]
+  updatedAt   DateTime          @updatedAt
+}
+
+model ProfileAudience {
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  profileId Int
+  audience  String // vorher: enum Audience
+  createdAt DateTime @default(now())
+
+  @@id([profileId, audience])
 }
 
 model Photo {
