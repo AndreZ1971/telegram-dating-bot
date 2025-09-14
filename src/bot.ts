@@ -68,4 +68,7 @@ bot.callbackQuery("toggle_adult", async (ctx) => {
 });
 
 bot.catch(err => console.error(err));
+
+console.log("✅ Bot läuft im Long-Polling. Drück Strg+C zum Beenden.");
 bot.start();
+
