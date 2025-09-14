@@ -1,0 +1,25 @@
+{
+  "name": "telegram-dating-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/bot.ts",
+    "build": "tsc",
+    "start": "node dist/bot.js",
+    "prisma:dev": "prisma migrate dev",
+    "prisma:gen": "prisma generate"
+  },
+  "dependencies": {
+    "@grammyjs/menu": "^1.2.0",
+    "@prisma/client": "^5.19.0",
+    "grammy": "^1.27.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "prisma": "^5.19.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}

@@ -1,0 +1,68 @@
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "sqlite" url = env("DATABASE_URL") }
+
+model User {
+  id          Int       @id
+  username    String?
+  firstName   String?
+  lang        String?
+  createdAt   DateTime  @default(now())
+  profile     Profile?
+  preferences Preferences?
+  likesFrom   Like[]    @relation("likes_from")
+  likesTo     Like[]    @relation("likes_to")
+}
+
+model Profile {
+  id          Int       @id @default(autoincrement())
+  user        User      @relation(fields: [userId], references: [id])
+  userId      Int       @unique
+  displayName String
+  age         Int?
+  bioMe       String?
+  bioSeek     String?
+  isAdult     Boolean   @default(false)
+  isSfwOnly   Boolean   @default(true)
+  visible     Boolean   @default(true)
+  photos      Photo[]
+  updatedAt   DateTime  @updatedAt
+}
+
+model Photo {
+  id        Int      @id @default(autoincrement())
+  profile   Profile  @relation(fields: [profileId], references: [id])
+  profileId Int
+  fileId    String
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model Preferences {
+  id        Int    @id @default(autoincrement())
+  user      User   @relation(fields: [userId], references: [id])
+  userId    Int    @unique
+  minAge    Int?
+  maxAge    Int?
+  showAdult Boolean @default(false)
+  radiusKm  Int?
+  tagsJson  String?
+}
+
+model Like {
+  id          Int   @id @default(autoincrement())
+  fromUser    User  @relation("likes_from", fields: [fromUserId], references: [id])
+  fromUserId  Int
+  toUser      User  @relation("likes_to", fields: [toUserId], references: [id])
+  toUserId    Int
+  createdAt   DateTime @default(now())
+
+  @@unique([fromUserId, toUserId])
+}
+
+model Report {
+  id              Int   @id @default(autoincrement())
+  reporterUserId  Int
+  reportedUserId  Int
+  reason          String?
+  createdAt       DateTime @default(now())
+}
