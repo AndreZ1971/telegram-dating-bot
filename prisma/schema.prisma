@@ -8,7 +8,7 @@ datasource db {
 }
 
 model User {
-  id          Int          @id
+  id          BigInt       @id
   username    String?
   firstName   String?
   lang        String?
@@ -22,7 +22,7 @@ model User {
 model Profile {
   id          Int      @id @default(autoincrement())
   user        User     @relation(fields: [userId], references: [id])
-  userId      Int      @unique
+  userId      BigInt   @unique
   displayName String
   age         Int?
   bioMe       String?
@@ -46,7 +46,7 @@ model Photo {
 model Preferences {
   id        Int     @id @default(autoincrement())
   user      User    @relation(fields: [userId], references: [id])
-  userId    Int     @unique
+  userId    BigInt  @unique
   minAge    Int?
   maxAge    Int?
   showAdult Boolean @default(false)
@@ -57,9 +57,9 @@ model Preferences {
 model Like {
   id         Int      @id @default(autoincrement())
   fromUser   User     @relation("likes_from", fields: [fromUserId], references: [id])
-  fromUserId Int
+  fromUserId BigInt
   toUser     User     @relation("likes_to", fields: [toUserId], references: [id])
-  toUserId   Int
+  toUserId   BigInt
   createdAt  DateTime @default(now())
 
   @@unique([fromUserId, toUserId])
@@ -67,8 +67,8 @@ model Like {
 
 model Report {
   id             Int      @id @default(autoincrement())
-  reporterUserId Int
-  reportedUserId Int
+  reporterUserId BigInt
+  reportedUserId BigInt
   reason         String?
   createdAt      DateTime @default(now())
 }

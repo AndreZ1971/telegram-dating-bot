@@ -32,7 +32,7 @@ bot.use(mainMenu);
 
 // /start & /help
 bot.command(["start", "help"], async (ctx) => {
-  const userId = ctx.from!.id;
+  const userId = BigInt(ctx.from!.id);
   await prisma.user.upsert({
     where: { id: userId },
     update: {
@@ -56,7 +56,7 @@ bot.command(["start", "help"], async (ctx) => {
 
 // /settings (MVP: nur 18+ Toggle)
 bot.command("settings", async (ctx) => {
-  const userId = ctx.from!.id;
+  const userId = BigInt(ctx.from!.id);
   const pref = await prisma.preferences.upsert({
     where: { userId },
     create: { userId, showAdult: false },
@@ -70,7 +70,7 @@ bot.command("settings", async (ctx) => {
 });
 
 bot.callbackQuery("toggle_adult", async (ctx) => {
-  const userId = ctx.from!.id;
+  const userId = BigInt(ctx.from!.id);
   const pref = await prisma.preferences.findUnique({ where: { userId } });
   if (!pref) return ctx.answerCallbackQuery();
   const nextVal = !pref.showAdult;
@@ -101,7 +101,7 @@ bot.command("profile", async (ctx) => {
 // Texteingaben verarbeiten (Schritt-für-Schritt)
 bot.on("message:text", async (ctx, next) => {
   const step = ctx.session.awaiting;
-  const userId = ctx.from!.id;
+  const userId = BigInt(ctx.from!.id);
 
   if (step === "displayName") {
     const displayName = ctx.message.text.trim().slice(0, 40);
