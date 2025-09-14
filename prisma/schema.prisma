@@ -8,44 +8,62 @@ datasource db {
 }
 
 model User {
-  id            BigInt    @id
-  username      String?
-  firstName     String?
-  lang          String?
-  createdAt     DateTime  @default(now())
+  id              BigInt    @id
+  username        String?
+  firstName       String?
+  lang            String?
+  createdAt       DateTime  @default(now())
 
-  profile       Profile?
-  preferences   Preferences?
+  profile         Profile?
+  preferences     Preferences?
 
-  // Beziehungen für Likes
-  likesFrom     Like[]    @relation("likes_from")
-  likesTo       Like[]    @relation("likes_to")
+  // Likes
+  likesFrom       Like[]    @relation("likes_from")
+  likesTo         Like[]    @relation("likes_to")
 
-  // Beziehungen für Reports
-  reportsMade       Report[] @relation("reports_made")
-  reportsReceived   Report[] @relation("reports_received")
+  // Reports
+  reportsMade     Report[]  @relation("reports_made")
+  reportsReceived Report[]  @relation("reports_received")
+
+  // Moderation actions
+  modActions      ModAction[] @relation("mod_actor")
 }
 
 model Profile {
-  id          Int       @id @default(autoincrement())
-  userId      BigInt    @unique
-  displayName String?
-  age         Int?
-  isAdult     Boolean   @default(false)
-  identity    String?
-  bioSeek     String?
-  visible     Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id              Int       @id @default(autoincrement())
+  userId          BigInt    @unique
+  displayName     String?
+  age             Int?
+  isAdult         Boolean   @default(false)
+  identity        String?
+  bioSeek         String?
+  visible         Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // ---- Location ----
+  lat             Float?
+  lon             Float?
+  city            String?
+  hasLocation     Boolean   @default(false)
 
-  // Interessen/Filter
-  audiences   ProfileAudience[]
-  // Fotos
-  photos      Photo[]
-  // Tags
-  profileTags ProfileTag[]
+  // ---- Moderation ----
+  suspended       Boolean   @default(false)
+  suspendedAt     DateTime?
+  suspendedReason String?
+  suspendedByUserId BigInt?
+  shadowbanned    Boolean   @default(false)
+
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Beziehungen
+  audiences       ProfileAudience[]
+  photos          Photo[]
+  profileTags     ProfileTag[]
+
+  @@index([visible])
+  @@index([suspended])
+  @@index([shadowbanned])
 }
 
 model Preferences {
@@ -53,6 +71,7 @@ model Preferences {
   showAdult Boolean  @default(false)
   minAge    Int?
   maxAge    Int?
+  radiusKm  Int?     // Distanz-Filter (km)
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
@@ -84,13 +103,22 @@ model Report {
 }
 
 model Photo {
-  id        Int      @id @default(autoincrement())
-  profileId Int
-  fileId    String
-  isPrimary Boolean  @default(false)
-  createdAt DateTime @default(now())
+  id              Int      @id @default(autoincrement())
+  profileId       Int
+  fileId          String
+  isPrimary       Boolean  @default(false)
+  createdAt       DateTime @default(now())
 
-  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  // Moderation
+  removed         Boolean  @default(false)
+  removedAt       DateTime?
+  removedReason   String?
+  removedByUserId BigInt?
+
+  profile         Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+  @@index([removed])
 }
 
 model ProfileAudience {
@@ -107,7 +135,7 @@ model ProfileAudience {
 model Tag {
   id          Int          @id @default(autoincrement())
   label       String
-  slug        String       @unique            // lowercase/normalisiert
+  slug        String       @unique  // normalized lowercase
   profileTags ProfileTag[]
 }
 
@@ -120,4 +148,25 @@ model ProfileTag {
 
   @@id([profileId, tagId])
   @@index([tagId])
+}
+
+model ModAction {
+  id              Int      @id @default(autoincrement())
+  createdAt       DateTime @default(now())
+
+  actorUserId     BigInt
+  action          String   // e.g. PROFILE_SUSPEND | PROFILE_UNSUSPEND | SHADOWBAN_ON | SHADOWBAN_OFF | PHOTO_REMOVE
+  reason          String?
+
+  targetUserId    BigInt?
+  targetProfileId Int?
+  targetPhotoId   Int?
+
+  actor           User     @relation("mod_actor", fields: [actorUserId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@index([action])
+  @@index([targetUserId])
+  @@index([targetProfileId])
+  @@index([targetPhotoId])
 }
