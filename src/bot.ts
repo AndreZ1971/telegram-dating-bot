@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { aiComplete, aiModerateText } from "./ai.js";
 import {
   Bot,
   InlineKeyboard,
@@ -136,6 +137,7 @@ type SessionData = {
   step: WizardStep;
   temp: TempProfile;
   browse?: BrowseState;
+  awaiting?: "displayName" | "age" | "bioMe" | "bioSeek" | "ai_chat";
 };
 
 type MyContext = Context & SessionFlavor<SessionData>;
@@ -511,7 +513,13 @@ async function goBack(ctx: MyContext) {
  *  Commands (User)
  * --------------------------------
  */
+// ❗️An den Dateianfang (bei den anderen Imports):
+// import { aiComplete } from "./ai.js";
+
 bot.command(["start", "help"], async (ctx) => {
+  // Falls ein KI-Chat noch lief: sauber beenden
+  ctx.session.awaiting = undefined;
+
   const id = userIdOf(ctx);
   await prisma.user.upsert({
     where: { id },
@@ -537,6 +545,7 @@ bot.command(["start", "help"], async (ctx) => {
       "• /location – Standort setzen/verwalten\n" +
       "• /browse – Profile entdecken\n" +
       "• /settings – 18+, Alters- & Radius-Filter\n" +
+      "• /ai – KI-Hilfe (Profil, Icebreaker, Tags)\n" +
       "• /deleteme – Profil & Daten löschen\n" +
       "• /cancel – aktuellen Vorgang abbrechen\n" +
       (isAdmin(ctx) ? "\n• /admin – Admin-Menü" : ""),
@@ -544,19 +553,58 @@ bot.command(["start", "help"], async (ctx) => {
   );
 });
 
+// 👉 KI-Concierge starten/beenden
+bot.command("ai", async (ctx) => {
+  ctx.session.awaiting = "ai_chat";
+  await ctx.reply(
+    "🤖 *KI-Assistent aktiv.* Sag mir, wobei ich helfen soll (Profil verbessern, Icebreaker, Tag-Ideen …).\n" +
+    "Beenden mit /ai_stop.",
+    { parse_mode: "Markdown" }
+  );
+});
+
+bot.command("ai_stop", async (ctx) => {
+  if (ctx.session.awaiting === "ai_chat") ctx.session.awaiting = undefined;
+  await ctx.reply("👋 KI-Chat beendet.");
+});
+
+// ⚠️ WICHTIG: Dieser Handler sollte VOR deinen Wizard/Text-Schritten registriert sein,
+// damit er eingehende Nachrichten im KI-Chat zuerst abfängt.
+bot.on("message:text", async (ctx, next) => {
+  // 0) KI-Chat abfangen
+  if (ctx.session.awaiting === "ai_chat") {
+    const city =
+      // falls du Stadt in der Session speicherst (optional)
+      (ctx as any).session?.city ? ` (Stadt: ${(ctx as any).session.city})` : "";
+    const ask = ctx.message.text.slice(0, 1000);
+    const answer = await aiComplete(
+      `Nutzeranfrage${city}: ${ask}
+Anweisungen:
+- Hilf bei kurzen, starken Profiltexten (freundlich, inklusiv, sicher).
+- Mach konkrete, umsetzbare Vorschläge (Stichpunkte/1–2 Sätze).
+- Keine Klarnamen, keine Kontakt-Apps, keine externen Links.`
+    );
+    return ctx.reply(answer);
+  }
+
+  // → danach deine bestehenden Schritte (Wizard/Felder etc.)
+  return next();
+});
+
+// Bestehende Commands bleiben wie gehabt
 bot.command("profile", async (ctx) => startWizard(ctx));
 bot.command("cancel", async (ctx) => {
   ctx.session.step = "idle";
   ctx.session.temp = {};
-  await ctx.reply(
-    "❌ Abgebrochen. Du kannst jederzeit mit /profile neu starten."
-  );
+  ctx.session.awaiting = undefined; // KI-Chat sicher beenden
+  await ctx.reply("❌ Abgebrochen. Du kannst jederzeit mit /profile neu starten.");
 });
 bot.command("myprofile", async (ctx) => showMyProfile(ctx));
 bot.command("browse", async (ctx) => startBrowse(ctx));
 bot.command("photos", async (ctx) => showPhotos(ctx as MyContext));
 bot.command("tags", async (ctx) => showTags(ctx as MyContext));
 bot.command("location", async (ctx) => showLocation(ctx as MyContext));
+
 
 /**
  * --------------------------------
@@ -1415,12 +1463,20 @@ bot.on("message:text", async (ctx, next) => {
     return goNext(ctx);
   }
 
-  if (step === "bioSeek") {
-    ctx.session.temp.bioSeek = text.slice(0, 500);
-    return goNext(ctx);
-  }
+if (step === "bioSeek") {
+  const clipped = text.slice(0, 500);
+  ctx.session.temp.bioSeek = clipped;
 
-  return next();
+  // KI-Moderation (nur Hinweis, blockiert nicht)
+  try {
+    const mod = await aiModerateText(clipped);
+    if (mod?.flag || mod?.nsfw || mod?.harassment || mod?.scam) {
+      await ctx.reply(`⚠️ Auto-Moderation: ${mod.reason ?? "Bitte Richtlinien beachten."}`);
+    }
+  } catch {}
+
+  return goNext(ctx);
+}
 });
 
 /**
