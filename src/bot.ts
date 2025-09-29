@@ -1,31 +1,20 @@
 import "dotenv/config";
-import { aiComplete, aiModerateText } from "./ai.js";
-import {
-  Bot,
-  InlineKeyboard,
-  Keyboard,
-  session,
-  Context,
-  SessionFlavor,
-} from "grammy";
-import { Menu } from "@grammyjs/menu";
+import { Bot, InlineKeyboard, Keyboard, session, Context, SessionFlavor } from "grammy";
 import { prisma } from "./db.js";
+import { aiComplete, aiModerateText } from "./ai.js";
 
-/**
- * --------------------------------
- *  Admin-Konfiguration
- * --------------------------------
- */
-const ADMIN_IDS: bigint[] = (process.env.ADMIN_IDS ?? "")
-  .split(",")
-  .map((x) => x.trim())
-  .filter(Boolean)
-  .map((x) => BigInt(x));
+// Barrel aus handlers/
+import * as H from "./handlers/index.js";
 
-const isAdmin = (ctx: Context) => {
-  const uid = BigInt(ctx.from!.id);
-  return ADMIN_IDS.includes(uid);
-};
+// Ausgelagertes Menü
+import { buildMainMenu } from "./ui/mainMenu.js";
+
+// Admin-Check
+import { isAdmin } from "./lib/isAdmin.js";
+
+
+const callOr = <F extends (ctx: any) => any>(fn: any, fallback: F) =>
+  (ctx: any) => (typeof fn === "function" ? fn(ctx) : fallback(ctx));
 
 /**
  * --------------------------------
@@ -359,23 +348,32 @@ bot.use(async (ctx, next) => {
 
 /**
  * --------------------------------
- *  Hauptmenü
+ *  Start / Help
  * --------------------------------
  */
-const mainMenu = new Menu("main-menu")
-  .text("🧭 Profil einrichten", (ctx) => startWizard(ctx))
-  .row()
-  .text("👤 Mein Profil", (ctx) => showMyProfile(ctx))
-  .row()
-  .text("🖼️ Fotos", (ctx) => showPhotos(ctx as MyContext))
-  .row()
-  .text("🏷️ Tags", (ctx) => showTags(ctx as MyContext))
-  .row()
-  .text("📍 Standort", (ctx) => showLocation(ctx as MyContext))
-  .row()
-  .text("🔎 Entdecken", (ctx) => startBrowse(ctx));
+bot.command(["start", "help"], async (ctx) => {
+  ctx.session.awaiting = undefined;
+  const id = BigInt(ctx.from!.id);
+  await prisma.user.upsert({
+    where: { id },
+    update: {
+      username: ctx.from?.username ?? undefined,
+      firstName: ctx.from?.first_name ?? undefined,
+      lang: ctx.from?.language_code ?? undefined,
+    },
+    create: {
+      id,
+      username: ctx.from?.username,
+      firstName: ctx.from?.first_name,
+      lang: ctx.from?.language_code,
+    },
+  });
 
-bot.use(mainMenu);
+  await ctx.reply(
+    '🌈 <b>Willkommen bei QueerBeet Dating!</b>\nWähle eine Option:',
+    { parse_mode: "HTML", reply_markup: buildMainMenu(isAdmin(ctx)) } // ← UI-Menü aus /ui/mainMenu.ts
+  );
+});
 
 /**
  * --------------------------------
@@ -516,66 +514,77 @@ async function goBack(ctx: MyContext) {
 // ❗️An den Dateianfang (bei den anderen Imports):
 // import { aiComplete } from "./ai.js";
 
-bot.command(["start", "help"], async (ctx) => {
-  // Falls ein KI-Chat noch lief: sauber beenden
-  ctx.session.awaiting = undefined;
+/**
+ * --------------------------------
+ *  Commands (User)
+ * --------------------------------
+ */
 
-  const id = userIdOf(ctx);
-  await prisma.user.upsert({
-    where: { id },
-    update: {
-      username: ctx.from?.username ?? undefined,
-      firstName: ctx.from?.first_name ?? undefined,
-      lang: ctx.from?.language_code ?? undefined,
-    },
-    create: {
-      id,
-      username: ctx.from?.username,
-      firstName: ctx.from?.first_name,
-      lang: ctx.from?.language_code,
-    },
-  });
+// Router (komplett geschlossen!)
+bot.callbackQuery(/^menu:(.+)$/, async (ctx) => {
+  const action = ctx.match![1];
+  await ctx.answerCallbackQuery();
 
-  await ctx.reply(
-    "Willkommen bei *QueerBeet Dating*! 🌈\n\n" +
-      "• /profile – Profil einrichten/bearbeiten\n" +
-      "• /myprofile – Profilkarte anzeigen\n" +
-      "• /photos – Fotos verwalten (1–3)\n" +
-      "• /tags – Interessen setzen\n" +
-      "• /location – Standort setzen/verwalten\n" +
-      "• /browse – Profile entdecken\n" +
-      "• /settings – 18+, Alters- & Radius-Filter\n" +
-      "• /ai – KI-Hilfe (Profil, Icebreaker, Tags)\n" +
-      "• /deleteme – Profil & Daten löschen\n" +
-      "• /cancel – aktuellen Vorgang abbrechen\n" +
-      (isAdmin(ctx) ? "\n• /admin – Admin-Menü" : ""),
-    { parse_mode: "Markdown", reply_markup: mainMenu }
-  );
-});
+  switch (action) {
+    case "profile":   return startWizard(ctx as MyContext);
+    case "myprofile": return showMyProfile(ctx as MyContext);
+    case "photos":    return showPhotos(ctx as MyContext);
+    case "tags":      return showTags(ctx as MyContext);
+    case "location":  return showLocation(ctx as MyContext);
+    case "browse":    return startBrowse(ctx as MyContext);
+    case "settings":  return showSettings(ctx as MyContext);
+    case "ai":        return startAiChat(ctx as MyContext);
+    case "deleteme":  return promptDelete(ctx as MyContext);
+    case "cancel":    return cancelFlow(ctx as MyContext);
+    case "admin":
+  return showAdminMenu(ctx as MyContext);
+    default:
+      return ctx.reply("❓ Unbekannte Aktion.");
+  }
+}); // <— diese Klammern & Semikolon unbedingt vorhanden
 
-// 👉 KI-Concierge starten/beenden
-bot.command("ai", async (ctx) => {
-  ctx.session.awaiting = "ai_chat";
-  await ctx.reply(
-    "🤖 *KI-Assistent aktiv.* Sag mir, wobei ich helfen soll (Profil verbessern, Icebreaker, Tag-Ideen …).\n" +
-    "Beenden mit /ai_stop.",
-    { parse_mode: "Markdown" }
-  );
-});
 
-bot.command("ai_stop", async (ctx) => {
-  if (ctx.session.awaiting === "ai_chat") ctx.session.awaiting = undefined;
-  await ctx.reply("👋 KI-Chat beendet.");
-});
-
-// ⚠️ WICHTIG: Dieser Handler sollte VOR deinen Wizard/Text-Schritten registriert sein,
-// damit er eingehende Nachrichten im KI-Chat zuerst abfängt.
-bot.on("message:text", async (ctx, next) => {
-  // 0) KI-Chat abfangen
+async function startAiChat(ctx: MyContext) {
   if (ctx.session.awaiting === "ai_chat") {
-    const city =
-      // falls du Stadt in der Session speicherst (optional)
-      (ctx as any).session?.city ? ` (Stadt: ${(ctx as any).session.city})` : "";
+    const kb = new InlineKeyboard().text("❌ Beenden", "ai:stop");
+    return ctx.reply(
+      '🤖 <b>KI-Assistent ist bereits aktiv.</b>\nBeenden mit <code>/ai_stop</code> oder Button unten.',
+      { parse_mode: "HTML", reply_markup: kb }
+    );
+  }
+  ctx.session.awaiting = "ai_chat";
+  const kb = new InlineKeyboard().text("❌ Beenden", "ai:stop");
+  await ctx.reply(
+    '🤖 <b>KI-Assistent aktiv.</b> Sag mir, wobei ich helfen soll (Profil verbessern, Icebreaker, Tag-Ideen …).\n' +
+    'Beenden mit <code>/ai_stop</code> oder Button unten.',
+    { parse_mode: "HTML", reply_markup: kb }
+  );
+}
+
+// 👉 KI-Concierge per Slash-Command beenden
+bot.command("ai_stop", async (ctx) => {
+  if (ctx.session.awaiting === "ai_chat") {
+    ctx.session.awaiting = undefined;
+    return ctx.reply("👋 KI-Chat beendet.");
+  }
+  return ctx.reply("ℹ️ Kein KI-Chat aktiv.");
+});
+
+// 👉 KI-Concierge per Button beenden (Callback)
+bot.callbackQuery("ai:stop", async (ctx) => {
+  if (ctx.session.awaiting === "ai_chat") ctx.session.awaiting = undefined;
+  await ctx.answerCallbackQuery({ text: "KI-Chat beendet" });
+  try {
+    await ctx.editMessageText("👋 KI-Chat beendet.");
+  } catch {
+    await ctx.reply("👋 KI-Chat beendet.");
+  }
+});
+
+// 👉 KI-Concierge: Texte abfangen, bevor Wizard-Handler greifen
+bot.on("message:text", async (ctx, next) => {
+  if (ctx.session.awaiting === "ai_chat") {
+    const city = (ctx as any).session?.city ? ` (Stadt: ${(ctx as any).session.city})` : "";
     const ask = ctx.message.text.slice(0, 1000);
     const answer = await aiComplete(
       `Nutzeranfrage${city}: ${ask}
@@ -586,24 +595,25 @@ Anweisungen:
     );
     return ctx.reply(answer);
   }
-
-  // → danach deine bestehenden Schritte (Wizard/Felder etc.)
   return next();
 });
 
-// Bestehende Commands bleiben wie gehabt
-bot.command("profile", async (ctx) => startWizard(ctx));
-bot.command("cancel", async (ctx) => {
-  ctx.session.step = "idle";
-  ctx.session.temp = {};
-  ctx.session.awaiting = undefined; // KI-Chat sicher beenden
-  await ctx.reply("❌ Abgebrochen. Du kannst jederzeit mit /profile neu starten.");
-});
-bot.command("myprofile", async (ctx) => showMyProfile(ctx));
-bot.command("browse", async (ctx) => startBrowse(ctx));
-bot.command("photos", async (ctx) => showPhotos(ctx as MyContext));
-bot.command("tags", async (ctx) => showTags(ctx as MyContext));
-bot.command("location", async (ctx) => showLocation(ctx as MyContext));
+
+// 🔗 Slash-Commands → externe Handler (H.*)
+bot.command("profile",   (ctx) => startWizard(ctx as MyContext));
+bot.command("myprofile", (ctx) => showMyProfile(ctx as MyContext));
+bot.command("photos",    (ctx) => showPhotos(ctx as MyContext));
+bot.command("tags",      (ctx) => showTags(ctx as MyContext));
+bot.command("location",  (ctx) => showLocation(ctx as MyContext));
+bot.command("browse",    (ctx) => startBrowse(ctx as MyContext));
+bot.command("settings",  (ctx) => showSettings(ctx as MyContext));
+bot.command("ai",        (ctx) => startAiChat(ctx as MyContext));
+bot.command("deleteme",  (ctx) => promptDelete(ctx as MyContext));
+bot.command("cancel",    (ctx) => cancelFlow(ctx as MyContext));
+//     (ctx) => isAdmin(ctx) ? handleAdmin?.(ctx as any) ?? ctx.reply("Admin-Menü: /admin") : ctx.reply("Nur für Admins."));
+
+
+
 
 
 /**
@@ -625,7 +635,10 @@ async function showMyProfile(ctx: MyContext) {
     return ctx.reply("Du hast noch kein Profil. Starte mit /profile.");
   }
 
-  const card = formatProfileCard(prof);
+  const card = formatProfileCard({
+    ...prof,
+    displayName: prof.displayName ?? "",
+  });
   const locLine =
     prof.hasLocation && prof.lat != null && prof.lon != null
       ? `\n📍 Standort gesetzt${prof.city ? ` · ${prof.city}` : ""}`
@@ -1229,7 +1242,10 @@ async function showNextCandidate(ctx: MyContext) {
     distanceLine = `\n📏 Entfernung: ≈ ${d} km`;
   }
 
-  const card = formatProfileCard(prof) + distanceLine;
+  const card = formatProfileCard({
+    ...prof,
+    displayName: prof.displayName ?? "",
+  }) + distanceLine;
 
   const kb = new InlineKeyboard()
     .text("❤️ Like", "br_like")
@@ -1593,7 +1609,7 @@ bot.command("settings", async (ctx) => {
   const prof = await prisma.profile.findUnique({ where: { userId: id } });
 
   const minAge = pref.minAge ?? 18;
-  const maxAge = pref.maxAge ?? 120;
+  const maxAge = pref.maxAge ?? 90;
   const radius = pref.radiusKm ?? 50;
   const loc = prof?.hasLocation ? "AN" : "AUS";
 
@@ -1706,48 +1722,63 @@ bot.callbackQuery("age:reset", async (ctx) => {
  *  /deleteme (Daten löschen)
  * --------------------------------
  */
-bot.command("deleteme", async (ctx) => {
+
+async function promptDelete(ctx: MyContext) {
   const kb = new InlineKeyboard()
     .text("❌ Löschen bestätigen", "del:yes")
     .text("Abbrechen", "del:no");
-  await ctx.reply(
-    "⚠️ Das löscht *alle* deine Daten (Profil, Likes, Meldungen, Einstellungen). Sicher?",
-    { parse_mode: "Markdown", reply_markup: kb }
-  );
-});
 
+  await ctx.reply(
+    "⚠️ Das löscht <b>alle</b> deine Daten (Profil, Likes, Meldungen, Einstellungen). Sicher?",
+    { parse_mode: "HTML", reply_markup: kb }
+  );
+}
+
+// Slash-Command ruft die Funktion auf
+bot.command("deleteme", (ctx) => promptDelete(ctx as MyContext));
+
+// Abbruch-Callback
 bot.callbackQuery("del:no", async (ctx) => {
   await ctx.answerCallbackQuery("Abgebrochen");
   await ctx.editMessageText("Löschen abgebrochen.");
 });
 
+// Bestätigen-Callback (löscht alles)
 bot.callbackQuery("del:yes", async (ctx) => {
   const id = userIdOf(ctx);
   const profile = await prisma.profile.findUnique({ where: { userId: id } });
 
-  await prisma.like.deleteMany({
-    where: { OR: [{ fromUserId: id }, { toUserId: id }] },
-  });
-  await prisma.report.deleteMany({
-    where: { OR: [{ reporterUserId: id }, { reportedUserId: id }] },
+  // Atomar löschen (wo möglich) – schützt vor Teilzuständen
+  await prisma.$transaction(async (tx) => {
+    await tx.like.deleteMany({ where: { OR: [{ fromUserId: id }, { toUserId: id }] } });
+    await tx.report.deleteMany({ where: { OR: [{ reporterUserId: id }, { reportedUserId: id }] } });
+
+    if (profile) {
+      await tx.photo.deleteMany({ where: { profileId: profile.id } });
+      await tx.profileTag.deleteMany({ where: { profileId: profile.id } });
+      await tx.profileAudience.deleteMany({ where: { profileId: profile.id } });
+      await tx.profile.delete({ where: { id: profile.id } });
+    }
+
+    await tx.preferences.deleteMany({ where: { userId: id } });
+    // User kann evtl. schon fehlen → Fehler hier nicht fatal
+    await tx.user.delete({ where: { id } }).catch(() => {});
   });
 
-  if (profile) {
-    await prisma.photo.deleteMany({ where: { profileId: profile.id } });
-    await prisma.profileTag.deleteMany({ where: { profileId: profile.id } });
-    await prisma.profileAudience.deleteMany({
-      where: { profileId: profile.id },
-    });
-    await prisma.profile.delete({ where: { id: profile.id } });
-  }
-
-  await prisma.preferences.deleteMany({ where: { userId: id } });
-  await prisma.user.delete({ where: { id } }).catch(() => {});
+  // Session sauber zurücksetzen
+  (ctx as MyContext).session.step = "idle";
+  (ctx as MyContext).session.temp = {};
+  (ctx as MyContext).session.awaiting = undefined;
 
   await ctx.answerCallbackQuery("Gelöscht");
-  await ctx.editMessageText(
-    "🗑️ Deine Daten wurden gelöscht. Du kannst jederzeit neu starten mit /profile."
-  );
+  // Versuche die Confirm-Nachricht zu ersetzen; wenn nicht möglich, sende neu
+  try {
+    await ctx.editMessageText(
+      "🗑️ Deine Daten wurden gelöscht. Du kannst jederzeit neu starten mit /profile."
+    );
+  } catch {
+    await ctx.reply("🗑️ Deine Daten wurden gelöscht. Du kannst jederzeit neu starten mit /profile.");
+  }
 });
 
 /**
@@ -1755,6 +1786,19 @@ bot.callbackQuery("del:yes", async (ctx) => {
  *  Admin-Menü & Moderations-Aktionen
  * --------------------------------
  */
+
+function buildAdminKb() {
+  return new InlineKeyboard()
+    .text("📣 Reports (neueste 10)", "adm:reports").row()
+    .text("🔍 Nutzer suchen", "adm:search").row()
+    .text("❎ Schließen", "adm:close");
+}
+
+async function showAdminMenu(ctx: MyContext) {
+  if (!isAdmin(ctx)) return ctx.reply("Nur für Admins.");
+  return ctx.reply("*Admin-Menü*", { parse_mode: "Markdown", reply_markup: buildAdminKb() });
+}
+
 bot.command("admin", async (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply("Nur für Admins.");
   const kb = new InlineKeyboard()
@@ -1809,15 +1853,9 @@ bot.callbackQuery("adm:reports", async (ctx) => {
 bot.callbackQuery("adm:back", async (ctx) => {
   if (!isAdmin(ctx)) return ctx.answerCallbackQuery();
   await ctx.answerCallbackQuery();
-  const kb = new InlineKeyboard()
-    .text("📣 Reports (neueste 10)", "adm:reports")
-    .row()
-    .text("🔍 Nutzer suchen", "adm:search")
-    .row()
-    .text("❎ Schließen", "adm:close");
   await ctx.editMessageText("*Admin-Menü*", {
     parse_mode: "Markdown",
-    reply_markup: kb,
+    reply_markup: buildAdminKb(),
   });
 });
 
@@ -1981,6 +2019,14 @@ bot.callbackQuery(/^adm:phdel:(\d+)$/, async (ctx) => {
 bot.callbackQuery("noop", async (ctx) => {
   await ctx.answerCallbackQuery();
 });
+
+bot.callbackQuery("adm:search", async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.answerCallbackQuery();
+  await ctx.answerCallbackQuery();
+  (ctx as MyContext).session.step = "adminSearch";
+  await ctx.editMessageText("🔎 Gib @username oder numerische User-ID ein:");
+});
+
 
 /**
  * --------------------------------
